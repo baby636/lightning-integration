@@ -10,6 +10,7 @@ from ptarmd import PtarmNode
 from concurrent import futures
 from utils import BitcoinD, BtcD
 from bech32 import bech32_decode
+from electrumutils import ElectrumX, ElectrumNode
 
 import logging
 import os
@@ -20,7 +21,7 @@ import time
 
 TEST_DIR = tempfile.mkdtemp(prefix='lightning-')
 TEST_DEBUG = os.getenv("TEST_DEBUG", "0") == "1"
-impls = [EclairNode, LightningNode, LndNode, PtarmNode]
+impls = [EclairNode, LightningNode, LndNode, PtarmNode, ElectrumNode]
 
 if TEST_DEBUG:
     logging.basicConfig(level=logging.DEBUG, stream=sys.stdout)
@@ -30,13 +31,14 @@ logging.info("Tests running in '%s'", TEST_DIR)
 class NodeFactory(object):
     """A factory to setup and start `lightningd` daemons.
     """
-    def __init__(self, testname, executor, btc, btcd):
+    def __init__(self, testname, executor, btc, btcd, electrumx):
         self.testname = testname
         self.next_id = 1
         self.nodes = []
         self.executor = executor
         self.btc = btc
         self.btcd = btcd
+        self.electrumx = electrumx
 
     def get_node(self, implementation):
         node_id = self.next_id
@@ -46,7 +48,7 @@ class NodeFactory(object):
             TEST_DIR, self.testname, "node-{}/".format(node_id))
         port = 16330+node_id
 
-        node = implementation(lightning_dir, port, self.btc,
+        node = implementation(lightning_dir, port, self.btc, self.electrumx,
                               executor=self.executor, node_id=node_id)
         self.nodes.append(node)
 
@@ -113,11 +115,18 @@ def btcd():
         btcd.proc.kill()
     btcd.proc.wait()
 
+@pytest.fixture(scope="module")
+def electrumx():
+    electrumx = ElectrumX()
+    electrumx.start()
+    yield electrumx
+    electrumx.kill()
+    electrumx.wait()
 
 @pytest.fixture
-def node_factory(request, bitcoind):
+def node_factory(request, bitcoind, electrumx):
     executor = futures.ThreadPoolExecutor(max_workers=20)
-    node_factory = NodeFactory(request._pyfuncitem.name, executor, bitcoind, None)
+    node_factory = NodeFactory(request._pyfuncitem.name, executor, bitcoind, None, electrumx)
     yield node_factory
     node_factory.killall()
     executor.shutdown(wait=False)

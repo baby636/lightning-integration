@@ -44,7 +44,7 @@ class PtarmNode(object):
 
     displayName = 'ptarmigan'
 
-    def __init__(self, lightning_dir, lightning_port, btc, executor=None, node_id=0):
+    def __init__(self, lightning_dir, lightning_port, btc, electrumx, executor=None, node_id=0):
         self.bitcoin = btc
         self.executor = executor
         self.daemon = PtarmD(lightning_dir, btc.bitcoin_dir, port=lightning_port)

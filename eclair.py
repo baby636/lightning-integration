@@ -114,7 +114,7 @@ class EclairNode(object):
 
     displayName = 'eclair'
 
-    def __init__(self, lightning_dir, lightning_port, btc, executor=None,
+    def __init__(self, lightning_dir, lightning_port, btc, electrumx, executor=None,
                  node_id=0):
         self.bitcoin = btc
         self.executor = executor
