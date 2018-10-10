@@ -37,8 +37,8 @@ class ElectrumX:
         os.system("rm -rf COIN hist meta utxo")
         environ.update({
             "COIN": "BitcoinSegwit",
-            "SSL_KEYFILE": "/home/janus/electrumx/key.pem",
-            "SSL_CERTFILE": "/home/janus/electrumx/cert.pem",
+            "SSL_KEYFILE": "/opt/electrumx/key.pem",
+            "SSL_CERTFILE": "/opt/electrumx/cert.pem",
             "TCP_PORT": "51001",
             "SSL_PORT": "51002",
             "RPC_PORT": str(8000),
@@ -97,7 +97,7 @@ class ElectrumDaemon:
         wallet.synchronize() # otherwise lnwatcher will be initialized with None sweep_address
         wallet.start_network(self.actual.network)
         self.actual.add_wallet(wallet)
-        self.actual.start()
+        #self.actual.start()
 
     def stop(self):
         if not self.actual:
@@ -123,13 +123,13 @@ class ElectrumNode:
         return [bh2u(x) for x in self.wallet.lnworker.peers.keys()]
 
     def id(self):
-        return bh2u(self.wallet.lnworker.pubkey)
+        return bh2u(self.wallet.lnworker.node_keypair.pubkey)
 
     def openchannel(self, node_id, host, port, satoshis):
         print("node/openchannel")
         # second parameter is local_amt_sat not capacity!
-        coro = self.wallet.lnworker.open_channel(node_id, satoshis, 0, pw=None)
-        print("open channel result", coro.result())
+        r = self.wallet.lnworker.open_channel(node_id, satoshis, 0, pw=None)
+        print("open channel result", r)
 
     def addfunds(self, bitcoind, satoshis):
         print("node/addfunds")
@@ -177,7 +177,7 @@ class ElectrumNode:
         for chan_info in channel_infos:
             nodes.add(bh2u(chan_info.node_id_1))
             nodes.add(bh2u(chan_info.node_id_2))
-        nodes.remove(self.wallet.lnworker.pubkey)
+        nodes.remove(self.wallet.lnworker.node_keypair.pubkey)
         return nodes
 
     def invoice(self, amount):
