@@ -37,10 +37,7 @@ class ElectrumX:
         os.system("rm -rf COIN hist meta utxo")
         environ.update({
             "COIN": "BitcoinSegwit",
-            "SSL_KEYFILE": "/opt/electrumx/key.pem",
-            "SSL_CERTFILE": "/opt/electrumx/cert.pem",
             "TCP_PORT": "51001",
-            "SSL_PORT": "51002",
             "RPC_PORT": str(8000),
             "NET": "regtest",
             "DAEMON_URL": "http://rpcuser:rpcpass@127.0.0.1:" + str(BITCOIND_CONFIG.get('rpcport', 18332)),
