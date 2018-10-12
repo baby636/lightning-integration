@@ -125,7 +125,7 @@ class ElectrumNode:
     def openchannel(self, node_id, host, port, satoshis):
         print("node/openchannel")
         # second parameter is local_amt_sat not capacity!
-        r = self.wallet.lnworker.open_channel(node_id, satoshis, 0, pw=None)
+        r = self.wallet.lnworker.open_channel(node_id, satoshis, 0)
         print("open channel result", r)
 
     def addfunds(self, bitcoind, satoshis):
