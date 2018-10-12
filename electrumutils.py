@@ -207,3 +207,11 @@ class ElectrumNode:
         time.sleep(5)
         self.daemon = ElectrumDaemon(electrumx)
         self.daemon.start()
+
+    def check_route(self, node_id, amount_sat):
+        net = self.wallet.network
+        method = net.path_finder.find_path_for_payment
+        async def f():
+            return method(bytes.fromhex(self.id()), bytes.fromhex(node_id), amount_sat * 1000)
+        coro = asyncio.run_coroutine_threadsafe(f(), net.asyncio_loop)
+        return coro.result()
