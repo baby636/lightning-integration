@@ -115,8 +115,9 @@ def btcd():
         btcd.proc.kill()
     btcd.proc.wait()
 
-@pytest.fixture(scope="module")
-def electrumx():
+@pytest.fixture()
+def electrumx(bitcoind):
+    # bitcoind only passed to ensure dependency topology (order)
     electrumx = ElectrumX()
     electrumx.start()
     yield electrumx
