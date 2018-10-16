@@ -62,9 +62,9 @@ class ElectrumX:
         self.thread.join()
 
 class ElectrumDaemon:
-    def __init__(self, electrumx):
+    def __init__(self, electrumx, port):
         self.electrumx = electrumx
-        self.port = -1
+        self.port = port
         self.actual = None
 
     def start(self):
@@ -74,6 +74,7 @@ class ElectrumDaemon:
             "oneserver": True,
             "server": "localhost:51001:t",
             "request_initial_sync": False,
+            "lightning_listen": "127.0.0.1:" + str(self.port),
         }
         user_dir = tempfile.mkdtemp(prefix="lightning-integration-electrum-")
         wallet_file_handle, wallet_file = tempfile.mkstemp(prefix="lightning-integration-electrum-wallet-")
@@ -107,7 +108,7 @@ class ElectrumNode:
 
     def __init__(self, lightning_dir, lightning_port, btc, electrumx, executor=None, node_id=0):
         print("node/__init__")
-        self.daemon = ElectrumDaemon(electrumx)
+        self.daemon = ElectrumDaemon(electrumx, lightning_port)
 
     @property
     def wallet(self):
