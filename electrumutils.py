@@ -1,22 +1,25 @@
 import logging
 import binascii
-from utils import BITCOIND_CONFIG
 import time
 import sys
 import os
 import tempfile
 import traceback
 import asyncio
+import threading
+
 from electrumx.server.controller import Controller
 from electrumx.server.env import Env
-import threading
-from electrum.daemon import Daemon, get_fd_or_server
-from electrum import simple_config, constants, keystore, util
+from electrum.daemon import Daemon
+from electrum import simple_config, constants, util
 from electrum.wallet import Wallet
 from electrum.storage import WalletStorage
-from electrum.mnemonic import Mnemonic
+
+from utils import BITCOIND_CONFIG
+
 
 bh2u = lambda x: binascii.hexlify(x).decode('ascii')
+
 
 class ElectrumX:
     def __init__(self):
@@ -33,15 +36,15 @@ class ElectrumX:
     def start(self):
         print("server/start")
         from os import environ
-        rpc_port = 8000
         os.system("rm -rf COIN hist meta utxo")
         environ.update({
             "COIN": "BitcoinSegwit",
             "TCP_PORT": "51001",
-            "RPC_PORT": str(8000),
+            "RPC_PORT": "8000",
             "NET": "regtest",
             "DAEMON_URL": "http://rpcuser:rpcpass@127.0.0.1:" + str(BITCOIND_CONFIG.get('rpcport', 18332)),
-            "DB_DIRECTORY": "."
+            "DB_DIRECTORY": ".",
+            "MAX_SESSIONS": "50",
         })
         def target():
             loop = self.loop
@@ -77,22 +80,14 @@ class ElectrumDaemon:
             "lightning_listen": "127.0.0.1:" + str(self.port),
         }
         user_dir = tempfile.mkdtemp(prefix="lightning-integration-electrum-")
-        wallet_file_handle, wallet_file = tempfile.mkstemp(prefix="lightning-integration-electrum-wallet-")
-        os.close(wallet_file_handle)
-        os.unlink(wallet_file)
+        config = simple_config.SimpleConfig(user_config, read_user_dir_function=lambda: user_dir)
         #util.set_verbosity(False)
         constants.set_regtest()
-        config = simple_config.SimpleConfig(user_config, None, lambda: user_dir)
-        self.actual = Daemon(config, get_fd_or_server(config)[0])
+        self.actual = Daemon(config)
         assert self.actual.network.asyncio_loop.is_running()
-        storage = WalletStorage(wallet_file)
-        k = keystore.from_seed(Mnemonic('en').make_seed('segwit'), "", False)
-        storage.put('keystore', k.dump())
-        storage.put('wallet_type', 'standard')
-        storage.put('use_encryption', False)
-        storage.write()
+        wallet_path = self.actual.cmd_runner.create(segwit=True)['path']
+        storage = WalletStorage(wallet_path)
         wallet = Wallet(storage)
-        wallet.synchronize() # otherwise lnwatcher will be initialized with None sweep_address
         wallet.start_network(self.actual.network)
         self.actual.add_wallet(wallet)
         #self.actual.start()
@@ -108,6 +103,8 @@ class ElectrumNode:
 
     def __init__(self, lightning_dir, lightning_port, btc, electrumx, executor=None, node_id=0):
         print("node/__init__")
+        self.electrumx = electrumx
+        self.lightning_port = lightning_port
         self.daemon = ElectrumDaemon(electrumx, lightning_port)
 
     @property
@@ -207,7 +204,7 @@ class ElectrumNode:
         print("node/restart")
         self.daemon.stop()
         time.sleep(5)
-        self.daemon = ElectrumDaemon(electrumx)
+        self.daemon = ElectrumDaemon(self.electrumx, self.lightning_port)
         self.daemon.start()
 
     def check_route(self, node_id, amount_sat):
