@@ -190,7 +190,8 @@ class ElectrumNode:
         return bh2u(preimage)
 
     def connect(self, host, port, node_id):
-        self.wallet.lnworker.add_peer(host, port, bytes.fromhex(node_id))
+        asyncio.run_coroutine_threadsafe(self.wallet.lnworker.add_peer(host, port, bytes.fromhex(node_id)),
+                                         asyncio.get_event_loop()).result()
 
     def info(self):
         local_height = self.daemon.actual.network.get_local_height()
