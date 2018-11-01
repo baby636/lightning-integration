@@ -286,16 +286,14 @@ def test_invoice_decode(node_factory, impl):
     capacity = 10**7
     node1 = node_factory.get_node(implementation=impl)
 
-    amount = int(capacity / 10)
+    amount = capacity // 10 * 1000
     payment_request = node1.invoice(amount)
     hrp, data = bech32_decode(payment_request)
 
     assert hrp and data
     assert hrp.startswith('lnbcrt')
 
-
-@pytest.mark.parametrize("impls", product(impls, repeat=2), ids=idfn)
-def test_direct_payment(bitcoind, node_factory, impls):
+def open_channel_get_invoice(bitcoind, node_factory, impls):
     node1 = node_factory.get_node(implementation=impls[0])
     node2 = node_factory.get_node(implementation=impls[1])
     capacity = 10**7
@@ -310,12 +308,94 @@ def test_direct_payment(bitcoind, node_factory, impls):
     bitcoind.rpc.generate(10)
     time.sleep(5)
 
-    node1.openchannel(node2.id(), 'localhost', node2.daemon.port, capacity)
-    assert confirm_channel(bitcoind, node1, node2)
+    txid, csv_delay_imposed_by_remote = node1.openchannel(node2.id(), 'localhost', node2.daemon.port, capacity)
+    time.sleep(1)
+    mined = bitcoind.rpc.generate(6)
+
+    assert txid in bitcoind.rpc.getblock(mined[0])['tx']
+    print('funding tx in block', mined[0])
 
     sync_blockheight(bitcoind, [node1, node2])
+    assert confirm_channel(bitcoind, node1, node2)
 
-    amount = int(capacity / 10)
+    return csv_delay_imposed_by_remote, capacity, node1, node2
+
+@pytest.mark.parametrize("impls", product(impls, repeat=2), ids=idfn)
+def test_redeem_htlc_funds(bitcoind, node_factory, impls):
+    csv_delay_imposed_by_remote, capacity, node1, node2 = open_channel_get_invoice(bitcoind, node_factory, impls)
+
+    old_bal = sum(node1.wallet.get_balance())
+
+    def add_one_htlc(amount):
+        req = node2.invoice(amount)
+        node1.add_htlc(req)
+
+    add_one_htlc(capacity // 4 * 1000)
+    add_one_htlc(capacity // 4 * 1000 + 1000)
+
+    htlcs = node2.pending_htlcs(node1)
+    assert len(htlcs) == 2
+
+    print('htlcs', htlcs)
+
+    node2.daemon.stop()
+
+    gen = node1.force_close(node2)
+    closing_txid = next(gen)
+    time.sleep(1)
+
+    expiration = htlcs[0].expiration_height
+    local_height = node1.info()['blockheight']
+    diff = expiration-local_height
+
+    print(f"expiration: {expiration}, local_height: {local_height}, diff: {diff}")
+
+    block_hash = bitcoind.rpc.generate(1)[0]
+    txids = bitcoind.rpc.getblock(block_hash)['tx']
+    assert closing_txid in txids
+    wait_for(lambda: max(node1.tx_heights([closing_txid]).values()) > 0)
+
+    block_hashes = bitcoind.rpc.generate(diff)
+    h1 = node1.get_published_e_tx()
+    h2 = node1.get_published_e_tx()
+    assert h1.name.startswith('our_ctx_htlc_tx')
+    assert h2.name.startswith('our_ctx_htlc_tx')
+    def wait_for_txs(txs):
+        nonlocal block_hashes
+        while True:
+            txid_list = bitcoind.rpc.getblock(block_hashes[0])['tx']
+            if all(x in txid_list for x in txs):
+                break
+            block_hashes = bitcoind.rpc.generate(1)
+    wait_for_txs([h1.tx.txid(), h2.tx.txid()])
+
+    block_hashes = bitcoind.rpc.generate(csv_delay_imposed_by_remote)
+    published = node1.get_published_e_tx()
+    if published.name.startswith('our_ctx_to_local'):
+        published = node1.get_published_e_tx()
+    assert published.name.startswith('second_stage')
+    wait_for_txs([published.tx.txid()])
+
+    block_hashes = bitcoind.rpc.generate(101)
+    print("second stage stage closure", next(gen))
+
+    matured, unconfirmed, unmatured = node1.wallet.get_balance()
+
+    # the 0.5 are fees
+    should_have = old_bal + capacity - 0.5 * 10**6
+
+    print(f'new balance: matured {matured}, unmatured {unmatured}, unconfirmed {unconfirmed}')
+    print('old balance', old_bal)
+    print("should have", should_have)
+    print("currently have", matured)
+    assert matured > should_have
+
+
+@pytest.mark.parametrize("impls", product(impls, repeat=2), ids=idfn)
+def test_direct_payment(bitcoind, node_factory, impls):
+    capacity, node1, node2 = open_channel_get_invoice(bitcoind, node_factory, impls)
+
+    amount = capacity // 10 * 1000
     req = node2.invoice(amount)
     dec = lndecode(req)
 
@@ -377,7 +457,7 @@ def test_forwarded_payment(bitcoind, node_factory, impls):
 
     src = nodes[0]
     dst = nodes[len(nodes)-1]
-    amount = int(capacity / 10)
+    amount = capacity // 10 * 1000
     req = dst.invoice(amount)
 
     print("Waiting for a route to be found")
@@ -414,7 +494,7 @@ def test_reconnect(bitcoind, node_factory, impls):
     wait_for(lambda: node2.check_channel(node1))
     sync_blockheight(bitcoind, [node1, node2])
 
-    amount = int(capacity / 10)
+    amount = capacity // 10 * 1000
     req = node2.invoice(amount)
     payment_key = node1.send(req)
     dec = lndecode(req)
