@@ -6,11 +6,16 @@ import sys
 import tempfile
 import threading
 import time
+import queue
 
 from electrum import constants, simple_config, util
 from electrum.daemon import Daemon
 from electrum.storage import WalletStorage
 from electrum.wallet import Wallet
+from electrum.lnutil import REMOTE
+from electrum.address_synchronizer import TX_HEIGHT_LOCAL
+from electrum.transaction import Transaction
+from electrum.lnwatcher import ListenerItem
 
 from electrumx.server.controller import Controller
 from electrumx.server.env import Env
@@ -107,6 +112,7 @@ class ElectrumNode:
         self.electrumx = get_electrumx()
         self.lightning_port = lightning_port
         self.daemon = ElectrumDaemon(self.electrumx, lightning_port)
+        self.broadcasted_encumbered_txs = queue.Queue()
 
     @property
     def wallet(self):
@@ -126,6 +132,15 @@ class ElectrumNode:
         # second parameter is local_amt_sat not capacity!
         r = self.wallet.lnworker.open_channel(node_id, satoshis, 0)
         self.logger.info("open channel result {}".format(r))
+        chan = self.chan(node_id)
+        csv_delay = chan.config[REMOTE].to_self_delay
+        funding_txid = chan.funding_outpoint.txid
+        return funding_txid, csv_delay
+
+    def chan(self, node_id):
+        chan = next(iter(self.wallet.lnworker.channels.values()))
+        assert chan.node_id == bytes.fromhex(node_id), (bh2u(chan.node_id), node_id)
+        return chan
 
     def addfunds(self, bitcoind, satoshis):
         self.logger.info("addfunds")
@@ -151,7 +166,7 @@ class ElectrumNode:
     def check_channel(self, remote):
         self.logger.info("check_channel")
         try:
-            chan = next(iter(self.wallet.lnworker.channels.values()))
+            chan = self.chan(remote.id())
         except StopIteration:
             return False
         else:
@@ -181,17 +196,23 @@ class ElectrumNode:
         self.logger.info("invoice")
         return self.wallet.lnworker.add_invoice(amount, "cup of coffee")
 
-    def send(self, req):
-        self.logger.info("send")
+    def add_htlc(self, req):
+        self.logger.info("add_htlc")
         addr, peer, coro = self.wallet.lnworker.pay(req)
         coro.result(5)
+        return addr, peer
+
+    def send(self, req):
+        self.logger.info("send")
+        addr, peer = self.add_htlc(req)
         coro = peer.payment_preimages[addr.paymenthash].get()
         preimage = asyncio.run_coroutine_threadsafe(coro, self.wallet.network.asyncio_loop).result(5)
         return bh2u(preimage)
 
     def connect(self, host, port, node_id):
-        asyncio.run_coroutine_threadsafe(self.wallet.lnworker.add_peer(host, port, bytes.fromhex(node_id)),
-                                         asyncio.get_event_loop()).result()
+        coro = self.wallet.lnworker.add_peer(host, port, bytes.fromhex(node_id))
+        fut = asyncio.run_coroutine_threadsafe(coro, asyncio.get_event_loop())
+        fut.result(5)
 
     def info(self):
         local_height = self.daemon.actual.network.get_local_height()
@@ -216,3 +237,39 @@ class ElectrumNode:
             return method(bytes.fromhex(self.id()), bytes.fromhex(node_id), amount_sat * 1000)
         coro = asyncio.run_coroutine_threadsafe(f(), net.asyncio_loop)
         return coro.result()
+
+    def get_published_e_tx(self):
+        return self.broadcasted_encumbered_txs.get(timeout=30)
+
+    def force_close(self, remote):
+        chan = self.chan(remote.id())
+        chan_id = chan.channel_id
+        loop = self.wallet.network.asyncio_loop
+        item = chan.lnwatcher.tx_progress[chan.funding_outpoint.to_str()] = ListenerItem(all_done=asyncio.Event(loop=loop), tx_queue=asyncio.Queue(loop=loop))
+        async def watch_queue():
+            seen = set()
+            while True:
+                e_tx = await item.tx_queue.get()
+                if e_tx in seen:
+                    continue
+                seen.add(e_tx)
+                self.broadcasted_encumbered_txs.put(e_tx)
+        coro = asyncio.run_coroutine_threadsafe(watch_queue(), loop)
+
+        coro = asyncio.run_coroutine_threadsafe(self.wallet.lnworker.force_close_channel(chan_id), loop)
+        yield coro.result(5)
+        yield asyncio.run_coroutine_threadsafe(item.all_done.wait(), loop).result(30)
+
+    @property
+    def addr_sync(self):
+        return self.daemon.actual.network.lnwatcher
+
+    def tx_heights(self, txs, wallet=False, seconds=5):
+        """ returns a dict that maps txids to their confirmation heights in
+        the address synchronizer of the LNWatcher if wallet is False,
+        or the wallet, if wallet is True
+        """
+        addr_sync = self.addr_sync if not wallet else self.wallet
+        async def f():
+            return {txid: addr_sync.get_tx_height(txid).height for txid in txs}
+        return asyncio.run_coroutine_threadsafe(f(), self.wallet.network.asyncio_loop).result(seconds)
