@@ -106,9 +106,11 @@ class LndNode(object):
         peers = self.daemon.stub.ListPeers(lnrpc.ListPeersRequest()).peers
         return [p.pub_key for p in peers]
 
-    def check_channel(self, remote):
-        """ Make sure that we have an active channel with remote
-        """
+    def pending_htlcs(self, remote):
+        channel = self._channel_with_remote(remote)
+        return channel.pending_htlcs
+
+    def _channel_with_remote(self, remote):
         self_id = self.id()
         remote_id = remote.id()
         channels = self.daemon.stub.ListChannels(lnrpc.ListChannelsRequest()).channels
@@ -117,8 +119,15 @@ class LndNode(object):
             self.logger.warning("Channel {} -> {} not found".format(self_id, remote_id))
             return False
 
-        channel = channel_by_remote[remote_id]
-        self.logger.debug("Channel {} -> {} state: {}".format(self_id, remote_id, channel))
+        return channel_by_remote[remote_id]
+
+    def check_channel(self, remote):
+        """ Make sure that we have an active channel with remote
+        """
+        channel = self._channel_with_remote(remote)
+        if not channel:
+            return False
+        self.logger.debug("Channel {} -> {} state: {}".format(self.id(), remote.id(), channel))
         return channel.active
 
     def addfunds(self, bitcoind, satoshis):
