@@ -44,6 +44,9 @@ class LndD(TailableProc):
             '--bitcoind.zmqpubrawblock=tcp://127.0.0.1:{}'.format(self.bitcoind.zmqpubrawblock_port),
             '--bitcoind.zmqpubrawtx=tcp://127.0.0.1:{}'.format(self.bitcoind.zmqpubrawtx_port),
             '--no-macaroons',
+            # TODO make this configurable
+            '--debughtlc',
+            '--hodl.exit-settle',
         ]
 
     def make_channel(self):
